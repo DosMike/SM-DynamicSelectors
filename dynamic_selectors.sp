@@ -15,14 +15,14 @@
 #define PLUGIN_VERSION "22w12a"
 
 public Plugin myinfo = {
-	name = "MC Dynamic Target Selectors",
+	name = "Dynamic Target Selectors",
 	author = "reBane",
 	description = "Use Target Selectors like Minecraft has them",
 	version = PLUGIN_VERSION,
 	url = "http://forums.alliedmods.net"
 };
 
-Regex g_mcSelector;
+Regex g_selectorPattern;
 char g_targetFilterError[256];
 bool g_bTargetFilterError;
 void SetFilterError(const char[] format, any...) {
@@ -79,23 +79,24 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 	CreateNative("DTS_RegisterTargetFilter", Native_RegisterFilter);
 	CreateNative("DTS_DropTargetFilter", Native_DropFilter);
 	RegPluginLibrary("DynamicTargetSelectors");
-}
-
-public void OnPluginStart() {
-	g_mcSelector = new Regex("(?<=^| )@[!]?[praes](?:\\[" //sm negation, mc variables
-		..."(?:[^\\s=,\\\"\\'\\[\\]]+=[^\\s=,\\\"\\'\\[\\]]+" //key = value
-		..."(?:,[^\\s=,\\\"\\'\\[\\]]+=[^\\s=,\\\"\\'\\[\\]]+)*)?" //repeat
-		..."\\])?(?= |$)", PCRE_UTF8); // value in [] is optional as well as [] itself
+	
 	g_activeSelectors = new ArrayList(sizeof(DynamicSelector));
 	g_targetFilters = new StringMap();
 	RegisterDefaultFilters();
+}
+
+public void OnPluginStart() {
+	g_selectorPattern = new Regex("(?<=^| )@[!]?[praes](?:\\[" //sm negation, plain pattern
+		..."(?:[^\\s=,\\\"\\'\\[\\]]+=[^\\s=,\\\"\\'\\[\\]]+" //key = value
+		..."(?:,[^\\s=,\\\"\\'\\[\\]]+=[^\\s=,\\\"\\'\\[\\]]+)*)?" //repeat
+		..."\\])?(?= |$)", PCRE_UTF8); // value in [] is optional as well as [] itself
 }
 
 public void OnPluginEnd() {
 	for (int i; i<g_activeSelectors.Length; i+=1) {
 		DynamicSelector selector;
 		g_activeSelectors.GetArray(i, selector);
-		RemoveMultiTargetFilter(selector.pattern, MC_MTFilter);
+		RemoveMultiTargetFilter(selector.pattern, DynamicFilterProcessor);
 	}
 }
 
@@ -126,27 +127,27 @@ public Action OnClientCommand(int client, int argc) {
 	
 	GetCmdArgString(args, sizeof(args));
 	
-	int matches = g_mcSelector.MatchAll(args);
+	int matches = g_selectorPattern.MatchAll(args);
 	if (matches <= 0) return Plugin_Continue; //no selectors for us
 	
 	char rebuild[256];
 	
 	strcopy(rebuild, sizeof(rebuild), args);
 	for (int match; match < matches; match += 1) {
-		g_mcSelector.GetSubString(0, buffer, sizeof(buffer), match);
+		g_selectorPattern.GetSubString(0, buffer, sizeof(buffer), match);
 		//PrintToServer("Match %i: %s", match+1, buffer);
 		DynamicSelector selector;
 		if (FindActiveSelector(buffer, client, selector)<0) {
 			selector.From(client, buffer);
 			g_activeSelectors.PushArray(selector);
-			AddMultiTargetFilter(buffer, MC_MTFilter, "Dynamic Selector", false);
+			AddMultiTargetFilter(buffer, DynamicFilterProcessor, "<Dynamic Selection>", false);
 		}
 	}
 	
 	return Plugin_Continue;
 }
 
-public bool MC_MTFilter(const char[] pattern, ArrayList clients) {
+public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients) {
 	DynamicSelector selector;
 	int selectorIndex = FindActiveSelector(pattern, _, selector);
 	if (selectorIndex < 0) return false;
@@ -249,7 +250,7 @@ public bool MC_MTFilter(const char[] pattern, ArrayList clients) {
 	if (data.GetString("c", value, sizeof(value))) {
 		int num;
 		if (StringToIntEx(value, num)!=strlen(value)) {
-			ReplyToCommand(sender, "[MC TARGET] Argument 'c' requires integer value");
+			ReplyToCommand(sender, "[DynSel] Argument 'c' requires integer value");
 			selector.filled=true;
 			g_activeSelectors.SetArray(selectorIndex, selector);
 			delete base;
@@ -294,7 +295,7 @@ public bool MC_MTFilter(const char[] pattern, ArrayList clients) {
 		} else if (StrEqual(value, "arbitrary")||StrEqual(value, "any")||StrEqual(value, "")) {
 			//it is what it is
 		} else {
-			ReplyToCommand(sender, "[MC TARGET] Unknown value for argument 'sorting': %s", value);
+			ReplyToCommand(sender, "[DynSel] Unknown value for argument 'sorting': %s", value);
 			selector.filled=true;
 			g_activeSelectors.SetArray(selectorIndex, selector);
 			delete base;
@@ -306,7 +307,7 @@ public bool MC_MTFilter(const char[] pattern, ArrayList clients) {
 	if (data.GetString("limit", value, sizeof(value))) {
 		int num;
 		if (StringToIntEx(value, num)!=strlen(value) || num < 0) {
-			ReplyToCommand(sender, "[MC TARGET] Argument 'limit' requires positive integer value");
+			ReplyToCommand(sender, "[DynSel] Argument 'limit' requires positive integer value");
 			selector.filled=true;
 			g_activeSelectors.SetArray(selectorIndex, selector);
 			delete base;
@@ -332,14 +333,14 @@ public bool MC_MTFilter(const char[] pattern, ArrayList clients) {
 		// base.filter(client->g_targetFilters(sender,client,key,value))
 		DtsTargetForward filter;
 		if (!g_targetFilters.GetArray(key, filter, sizeof(DtsTargetForward))) {
-			ReplyToCommand(sender, "[MC TARGET] Unknown argument type: '%s'", key);
+			ReplyToCommand(sender, "[DynSel] Unknown argument type: '%s'", key);
 			base.Clear();
 			break;
 		} else {
 			for (int j=base.Length-1; j>=0; j-=1) {
 				bool keep = filter.Test(sender, base.Get(j, 1), key, value);
 				if (g_bTargetFilterError) {
-					ReplyToCommand(sender, "[MC TARGET] Error: %s", g_targetFilterError);
+					ReplyToCommand(sender, "[DynSel] Error: %s", g_targetFilterError);
 					base.Clear();
 					break;
 				}
