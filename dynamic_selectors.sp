@@ -85,11 +85,23 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 	RegisterDefaultFilters();
 }
 
+public void ConVarLocked(ConVar convar, const char[] oldValue, const char[] newValue) {
+	char buf[64];
+	convar.GetString(buf, sizeof(buf));
+	if (!StrEqual(buf, PLUGIN_VERSION)) convar.SetString(PLUGIN_VERSION);
+}
+
+
 public void OnPluginStart() {
 	g_selectorPattern = new Regex("(?<=^| )@[!]?[praes](?:\\[" //sm negation, plain pattern
 		..."(?:[^\\s=,\\\"\\'\\[\\]]+=[^\\s=,\\\"\\'\\[\\]]+" //key = value
 		..."(?:,[^\\s=,\\\"\\'\\[\\]]+=[^\\s=,\\\"\\'\\[\\]]+)*)?" //repeat
 		..."\\])?(?= |$)", PCRE_UTF8); // value in [] is optional as well as [] itself
+	
+	ConVar version = CreateConVar("dynamic_selectors_version", PLUGIN_VERSION, "Plugin version for Dynamic Selectors", FCVAR_DONTRECORD|FCVAR_NOTIFY);
+	version.AddChangeHook(ConVarLocked);
+	ConVarLocked(version,"","");
+	delete version;
 }
 
 public void OnPluginEnd() {
