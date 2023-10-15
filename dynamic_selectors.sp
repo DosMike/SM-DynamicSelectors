@@ -12,7 +12,11 @@
 // IEEE754 BitPattern for -Inf
 #define FLOAT_NINFINITY view_as<float>(0xFF800000)
 
-#define PLUGIN_VERSION "22w12a"
+#define PLUGIN_VERSION "23w41a"
+
+// uncomment to allow server console to use dynamic selectors.
+// note: this method is ugly and requires a reload if plugins change!
+//#define ALT_HOOK_METHOD
 
 public Plugin myinfo = {
 	name = "Dynamic Target Selectors",
@@ -38,7 +42,7 @@ enum struct DynamicSelector {
 	int targetCount;
 	bool filled;
 	void From(int client, const char[] buffer) {
-		this.sender = GetClientUserId(client);
+		this.sender = client ? GetClientUserId(client) : 0;
 		strcopy(this.pattern, sizeof(DynamicSelector::pattern), buffer);
 		this.myTick = GetGameTickCount();
 		this.filled = false;
@@ -49,7 +53,7 @@ typeset DtsTargetFilter {
 }
 enum struct DtsTargetForward {
 	Handle plugin;
-	DtsTargetFilter fun;
+	Function fun; //type: DtsTargetFilter
 	
 	/** check g_bTargetFilterError after call! */
 	bool Test(int sender, int client, const char[] key, const char[] value) {
@@ -83,6 +87,8 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 	g_activeSelectors = new ArrayList(sizeof(DynamicSelector));
 	g_targetFilters = new StringMap();
 	RegisterDefaultFilters();
+	
+	return APLRes_Success;
 }
 
 public void ConVarLocked(ConVar convar, const char[] oldValue, const char[] newValue) {
@@ -102,6 +108,15 @@ public void OnPluginStart() {
 	version.AddChangeHook(ConVarLocked);
 	ConVarLocked(version,"","");
 	delete version;
+	
+#if defined ALT_HOOK_METHOD
+	char namebuf[128];
+	Handle cmdit = GetCommandIterator();
+	while (ReadCommandIterator(cmdit, namebuf, sizeof(namebuf))) {
+		AddCommandListener(OnSourcemodCommand, namebuf);
+	}
+	delete cmdit;
+#endif
 }
 
 public void OnPluginEnd() {
@@ -132,10 +147,14 @@ public void OnGameFrame() {
 	}
 }
 
-
+#if defined ALT_HOOK_METHOD
+Action OnSourcemodCommand(int client, const char[] name, int argc) {
+#else
 public Action OnClientCommand(int client, int argc) {
+#endif
 	char args[256];
 	char buffer[128];
+	PrintToServer("Requester: %N", client);
 	
 	GetCmdArgString(args, sizeof(args));
 	
@@ -287,23 +306,20 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients) {
 		data.Remove("c");
 	}
 	if (data.GetString("sort", value, sizeof(value))) {
+		//set sort cell 0 base on client in cell 1
 		if (StrEqual(value, "nearest")||StrEqual(value, "near")) {
 			//sort by distance positive
 			for (int i;i<base.Length;i++)
-				base.Set(i, clientDist(sender, base.Get(i, 1)), 0); //set sort cell 0 base on client in cell 1
+				base.Set(i, clientDist(sender, base.Get(i, 1)), 0);
 			base.Sort(Sort_Ascending, Sort_Float);
 		} else if (StrEqual(value, "furthest")||StrEqual(value, "far")) {
 			for (int i;i<base.Length;i++)
-				base.Set(i, clientDist(sender, base.Get(i, 1)), 0); //set sort cell 0 base on client in cell 1
+				base.Set(i, clientDist(sender, base.Get(i, 1)), 0);
 			base.Sort(Sort_Descending, Sort_Float);
 		} else if (StrEqual(value, "random")||StrEqual(value, "rng")) {
-			for (int i;i<base.Length;i++) { //shuffle
-				int o = GetRandomInt(0,base.Length-1); // other index
-				PrintToServer("Shuffle %i and %i", i,o);
-				int tmp = base.Get(i, 1); //t=i
-				base.Set(i, base.Get(o,1) ,1); //i=o
-				base.Set(o, tmp ,1); //o=t
-			}
+			for (int i;i<base.Length;i++)
+				base.Set(i, GetRandomInt(0,100), 0);
+			base.Sort(Sort_Ascending, Sort_Integer);
 		} else if (StrEqual(value, "arbitrary")||StrEqual(value, "any")||StrEqual(value, "")) {
 			//it is what it is
 		} else {
@@ -563,6 +579,7 @@ public bool DTF_health(int sender, int client, const char[] key, const char[] va
 public any Native_SetFilterError(Handle plugin, int numParams) {
 	FormatNativeString(0, 1, 2, sizeof(g_targetFilterError), _, g_targetFilterError);
 	g_bTargetFilterError = true;
+	return 0;
 }
 public any Native_RegisterFilter(Handle plugin, int numParams) {
 	char argument[64];
@@ -570,7 +587,7 @@ public any Native_RegisterFilter(Handle plugin, int numParams) {
 	
 	DtsTargetForward fwd;
 	fwd.plugin = plugin;
-	fwd.fun = view_as<DtsTargetFilter>(GetNativeFunction(2));
+	fwd.fun = GetNativeFunction(2);
 	
 	DtsTargetForward tmp;
 	tmp.plugin = INVALID_HANDLE;
