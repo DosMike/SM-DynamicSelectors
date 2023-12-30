@@ -12,7 +12,7 @@
 // IEEE754 BitPattern for -Inf
 #define FLOAT_NINFINITY view_as<float>(0xFF800000)
 
-#define PLUGIN_VERSION "23w41a"
+#define PLUGIN_VERSION "23w52a"
 
 // uncomment to allow server console to use dynamic selectors.
 // note: this method is ugly and requires a reload if plugins change!
@@ -33,6 +33,7 @@ void SetFilterError(const char[] format, any...) {
 	VFormat(g_targetFilterError, sizeof(g_targetFilterError), format, 2);
 	g_bTargetFilterError = true;
 }
+char g_selections[MAXPLAYERS+1][256];
 
 enum struct DynamicSelector {
 	int sender;
@@ -104,6 +105,10 @@ public void OnPluginStart() {
 		..."(?:,[^\\s=,\\\"\\'\\[\\]]+=[^\\s=,\\\"\\'\\[\\]]+)*)?" //repeat
 		..."\\])?(?= |$)", PCRE_UTF8); // value in [] is optional as well as [] itself
 	
+	RegConsoleCmd("sm_select", CmdSelect, "Usage: /select <clients> - Select targets to be used later using @selected");
+	AddMultiTargetFilter("@selected", SelectedFilterProcessor, "selection", false);
+	LoadTranslations("common.phrases");
+
 	ConVar version = CreateConVar("dynamic_selectors_version", PLUGIN_VERSION, "Plugin version for Dynamic Selectors", FCVAR_DONTRECORD|FCVAR_NOTIFY);
 	version.AddChangeHook(ConVarLocked);
 	ConVarLocked(version,"","");
@@ -120,6 +125,8 @@ public void OnPluginStart() {
 }
 
 public void OnPluginEnd() {
+	RemoveMultiTargetFilter("@selected", SelectedFilterProcessor);
+
 	for (int i; i<g_activeSelectors.Length; i+=1) {
 		DynamicSelector selector;
 		g_activeSelectors.GetArray(i, selector);
@@ -127,6 +134,19 @@ public void OnPluginEnd() {
 	}
 }
 
+
+Action CmdSelect(int client, int args) {
+	GetCmdArgString(g_selections[client], sizeof(g_selections[]));
+	if (g_selections[client][0])
+		ReplyToCommand(client, "[SM] Personal selector stored. Use @selected in a command");
+	else
+		ReplyToCommand(client, "[SM] Cleared your personal selector. @selected disabled");
+	return Plugin_Handled;
+}
+
+public void OnClientDisconnect(int client) {
+	g_selections[client][0] = 0;
+}
 
 int FindActiveSelector(const char[] pattern, int client=0, DynamicSelector selector={}) {
 	int user = client ? GetClientUserId(client) : 0;
@@ -147,23 +167,12 @@ public void OnGameFrame() {
 	}
 }
 
-#if defined ALT_HOOK_METHOD
-Action OnSourcemodCommand(int client, const char[] name, int argc) {
-#else
-public Action OnClientCommand(int client, int argc) {
-#endif
-	char args[256];
-	char buffer[128];
-	PrintToServer("Requester: %N", client);
-	
-	GetCmdArgString(args, sizeof(args));
-	
+void RegisterDynamicSelectors(int client, const char[] args) {
+	char buffer[256];
 	int matches = g_selectorPattern.MatchAll(args);
-	if (matches <= 0) return Plugin_Continue; //no selectors for us
+	if (matches <= 0) return; //no selectors for us
 	
-	char rebuild[256];
-	
-	strcopy(rebuild, sizeof(rebuild), args);
+	char display[256];
 	for (int match; match < matches; match += 1) {
 		g_selectorPattern.GetSubString(0, buffer, sizeof(buffer), match);
 		//PrintToServer("Match %i: %s", match+1, buffer);
@@ -171,16 +180,46 @@ public Action OnClientCommand(int client, int argc) {
 		if (FindActiveSelector(buffer, client, selector)<0) {
 			selector.From(client, buffer);
 			g_activeSelectors.PushArray(selector);
-			AddMultiTargetFilter(buffer, DynamicFilterProcessor, "<Dynamic Selection>", false);
+			FormatEx(display, sizeof(display), "<[DynSel] %s>", buffer);
+			AddMultiTargetFilter(buffer, DynamicFilterProcessor, display, false);
 		}
 	}
+}
+
+#if defined ALT_HOOK_METHOD
+Action OnSourcemodCommand(int client, const char[] name, int argc) {
+#else
+public Action OnClientCommand(int client, int argc) {
+#endif
+	char args[256];
+	//PrintToServer("Requester: %N", client);
+	
+	GetCmdArgString(args, sizeof(args));
+	RegisterDynamicSelectors(client, args);
 	
 	return Plugin_Continue;
 }
 
-public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients) {
+public bool SelectedFilterProcessor(const char[] pattern, ArrayList clients, int admin) {
+	if (g_selections[admin][0]==0) return false;
+	
+	RegisterDynamicSelectors(admin, g_selections[admin]);
+
+	int targets[MAXPLAYERS];
+	char tn[4];
+	bool tn_is_ml;
+	// we return all. if the parent ProcessTargetString call specified filter bits right vvv here, that'll apply later
+	int count = ProcessTargetString(g_selections[admin], admin, targets, sizeof(targets), COMMAND_FILTER_CONNECTED|COMMAND_FILTER_NO_IMMUNITY, tn, sizeof(tn), tn_is_ml);
+
+	if (count <= 0) return true; //recognized but empty
+
+	for (int i; i<count; i++) clients.Push(targets[i]);
+	return true;
+}
+
+public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients, int admin) {
 	DynamicSelector selector;
-	int selectorIndex = FindActiveSelector(pattern, _, selector);
+	int selectorIndex = FindActiveSelector(pattern, admin, selector);
 	if (selectorIndex < 0) return false;
 	
 	//we already processed this
@@ -245,7 +284,10 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients) {
 			}
 		}
 		//if this matches, i effed up somewhere
-		default: ThrowError("Unknown dynamic patten variable '%c'", type);
+		default: {
+			//ThrowError("Unknown dynamic patten variable '%c'", type);
+			ReplyToCommand(sender, "[DynSel] Unknown dynamic pattern variable '%c'", type);
+		}
 	}
 	
 	//parse keyvalues
@@ -271,7 +313,7 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients) {
 				ab = false;
 				
 				//found another key
-				PrintToServer("Pushing '%s'='%s'", key, value);
+				//PrintToServer("Pushing '%s'='%s'", key, value);
 				data.SetString(key, value);
 			}
 		}

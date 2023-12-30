@@ -49,6 +49,19 @@ Range values are formatted according to this list and can be negated using a ! p
 * A lower bound: attrib=100..
 * Both bounds: attribg=-100..100
 
+### Store selection
+
+If a plugin appears to be broken when using a dynamic selector, or if you dont want to re-type
+the selector every time you run a batch of commands, you can use `/select` and `@selected`.
+
+As you might guess, `/select` stores any arbitrary argument as target parameter, later accessible
+as `@selected`. `/select` by default is accessible to everyone. For example:
+`sm_select @r[flag=!z]; sm_slay @selected`
+
+This still uses target selectors, so you can't just make commands magically longer!
+
+### Plugin Devs
+
 Plugins can also register additional argument parsers with these natives:
 ```php
 OnPluginStart() {
