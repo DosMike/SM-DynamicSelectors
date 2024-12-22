@@ -12,7 +12,7 @@
 // IEEE754 BitPattern for -Inf
 #define FLOAT_NINFINITY view_as<float>(0xFF800000)
 
-#define PLUGIN_VERSION "23w52a"
+#define PLUGIN_VERSION "24w51a"
 
 // uncomment to allow server console to use dynamic selectors.
 // note: this method is ugly and requires a reload if plugins change!
@@ -33,7 +33,8 @@ void SetFilterError(const char[] format, any...) {
 	VFormat(g_targetFilterError, sizeof(g_targetFilterError), format, 2);
 	g_bTargetFilterError = true;
 }
-char g_selections[MAXPLAYERS+1][256];
+char g_macros[MAXPLAYERS+1][256];
+ArrayList g_selections[MAXPLAYERS+1]; //null unless result
 
 enum struct DynamicSelector {
 	int sender;
@@ -105,6 +106,8 @@ public void OnPluginStart() {
 		..."(?:,[^\\s=,\\\"\\'\\[\\]]+=[^\\s=,\\\"\\'\\[\\]]+)*)?" //repeat
 		..."\\])?(?= |$)", PCRE_UTF8); // value in [] is optional as well as [] itself
 	
+	RegConsoleCmd("sm_macroselect", CmdMacro, "Usage: /macroselect <clients> - Store a target selection macro to use with @macro");
+	AddMultiTargetFilter("@macro", MacroFilterProcessor, "macro", false);
 	RegConsoleCmd("sm_select", CmdSelect, "Usage: /select <clients> - Select targets to be used later using @selected");
 	AddMultiTargetFilter("@selected", SelectedFilterProcessor, "selection", false);
 	LoadTranslations("common.phrases");
@@ -135,20 +138,44 @@ public void OnPluginEnd() {
 }
 
 
-Action CmdSelect(int client, int args) {
-	GetCmdArgString(g_selections[client], sizeof(g_selections[]));
-	if (g_selections[client][0])
-		ReplyToCommand(client, "[SM] Personal selector stored. Use @selected in a command");
+Action CmdMacro(int client, int args) {
+	GetCmdArgString(g_macros[client], sizeof(g_macros[]));
+	if (g_macros[client][0])
+		ReplyToCommand(client, "[SM] Personal selection macro stored. Use @macro in a command");
 	else
+		ReplyToCommand(client, "[SM] Cleared your personal selection macro. @macro disabled");
+	return Plugin_Handled;
+}
+
+Action CmdSelect(int client, int args) {
+	char buffer[1024];
+	GetCmdArgString(buffer, sizeof(buffer));
+	if (g_selections[client] != null) delete g_selections[client];
+	if (buffer[0]) {
+		RegisterDynamicSelectors(client, buffer);
+
+		int targets[MAXPLAYERS];
+		char tn[4];
+		bool tn_is_ml;
+		// we return all. if the parent ProcessTargetString call specified filter bits right vvv here, that'll apply later
+		int count = ProcessTargetString(buffer, client, targets, sizeof(targets), COMMAND_FILTER_CONNECTED|COMMAND_FILTER_NO_IMMUNITY, tn, sizeof(tn), tn_is_ml);
+
+		g_selections[client] = new ArrayList();
+		for (int i; i<count; i++) g_selections[client].Push(GetClientUserId(targets[i]));
+
+		ReplyToCommand(client, "[SM] Personal selector stored. Use @selected in a command (%i targets)", count);
+	} else {
 		ReplyToCommand(client, "[SM] Cleared your personal selector. @selected disabled");
+	}
 	return Plugin_Handled;
 }
 
 public void OnClientDisconnect(int client) {
-	g_selections[client][0] = 0;
+	g_macros[client][0] = 0;
+	delete g_selections[client];
 }
 
-int FindActiveSelector(const char[] pattern, int client=0, DynamicSelector selector={}) {
+int FindActiveSelector(const char[] pattern, int client=0, DynamicSelector selector) {
 	int user = client ? GetClientUserId(client) : 0;
 	for (int at; at < g_activeSelectors.Length; at += 1) {
 		g_activeSelectors.GetArray(at, selector);
@@ -200,20 +227,32 @@ public Action OnClientCommand(int client, int argc) {
 	return Plugin_Continue;
 }
 
-public bool SelectedFilterProcessor(const char[] pattern, ArrayList clients, int admin) {
-	if (g_selections[admin][0]==0) return false;
-	
-	RegisterDynamicSelectors(admin, g_selections[admin]);
+public bool MacroFilterProcessor(const char[] pattern, ArrayList clients, int admin) {
+	if (g_macros[admin][0]==0) return false;
+
+	RegisterDynamicSelectors(admin, g_macros[admin]);
 
 	int targets[MAXPLAYERS];
 	char tn[4];
 	bool tn_is_ml;
 	// we return all. if the parent ProcessTargetString call specified filter bits right vvv here, that'll apply later
-	int count = ProcessTargetString(g_selections[admin], admin, targets, sizeof(targets), COMMAND_FILTER_CONNECTED|COMMAND_FILTER_NO_IMMUNITY, tn, sizeof(tn), tn_is_ml);
+	int count = ProcessTargetString(g_macros[admin], admin, targets, sizeof(targets), COMMAND_FILTER_CONNECTED|COMMAND_FILTER_NO_IMMUNITY, tn, sizeof(tn), tn_is_ml);
 
 	if (count <= 0) return true; //recognized but empty
 
 	for (int i; i<count; i++) clients.Push(targets[i]);
+	return true;
+}
+
+public bool SelectedFilterProcessor(const char[] pattern, ArrayList clients, int admin) {
+	if (g_selections[admin]==null) return false;
+	
+	int selectionCount = g_selections[admin].Length;
+	for (int i; i < selectionCount; i++) {
+		int client = GetClientOfUserId(g_selections[admin].Get(i));
+		if (client) clients.Push(client);
+	}
+
 	return true;
 }
 
@@ -233,6 +272,7 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients, int 
 	
 	bool passFilter = pattern[1]!='!';
 	char type = pattern[passFilter?1:2];
+	// ReplyToCommand(admin, "Selection pass: %s", passFilter ? "Whitelist" : "Blacklist");
 	
 	//store client on cell 2 so we can sort by arbitrary 1st cell
 	ArrayList base = new ArrayList(2);
@@ -251,6 +291,7 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients, int 
 			}
 			data.SetString("sort", "nearest");
 			limit = 1;
+			// ReplyToCommand(admin, "Type P: sort near, limit 1");
 		}
 		case 'r': {
 			int pushable[2];
@@ -261,6 +302,7 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients, int 
 			}
 			data.SetString("sort", "random");
 			limit = 1;
+			// ReplyToCommand(admin, "Type R: sort random, limit 1");
 		}
 		case 's': {
 			int pushable[2];
@@ -274,6 +316,7 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients, int 
 					base.PushArray(pushable);
 				}
 			}
+			// ReplyToCommand(admin, "Type S: self");
 		}
 		case 'a','e': {
 			int pushable[2];
@@ -282,6 +325,7 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients, int 
 				pushable[1]=client;
 				base.PushArray(pushable);
 			}
+			// ReplyToCommand(admin, "Type A: no sort, no limit");
 		}
 		//if this matches, i effed up somewhere
 		default: {
@@ -313,10 +357,11 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients, int 
 				ab = false;
 				
 				//found another key
-				//PrintToServer("Pushing '%s'='%s'", key, value);
 				data.SetString(key, value);
+				// ReplyToCommand(admin, "Selection KV: %s = %s", key, value);
 			}
 		}
+		ReplyToCommand(admin, "[DynSel] Selection option \"%s\" has no value, ignoring", key);
 	}
 	
 	//pre-process keyvalues
@@ -346,6 +391,7 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients, int 
 		}
 		data.Remove("limit");
 		data.Remove("c");
+		// ReplyToCommand(admin, "Builtin count: %s %i", num > 0 ? "furthest" : "nearest", limit);
 	}
 	if (data.GetString("sort", value, sizeof(value))) {
 		//set sort cell 0 base on client in cell 1
@@ -359,9 +405,7 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients, int 
 				base.Set(i, clientDist(sender, base.Get(i, 1)), 0);
 			base.Sort(Sort_Descending, Sort_Float);
 		} else if (StrEqual(value, "random")||StrEqual(value, "rng")) {
-			for (int i;i<base.Length;i++)
-				base.Set(i, GetRandomInt(0,100), 0);
-			base.Sort(Sort_Ascending, Sort_Integer);
+			base.Sort(Sort_Random, Sort_Integer);
 		} else if (StrEqual(value, "arbitrary")||StrEqual(value, "any")||StrEqual(value, "")) {
 			//it is what it is
 		} else {
@@ -373,6 +417,7 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients, int 
 			return true; //return no hits for this
 		}
 		data.Remove("sort");
+		// ReplyToCommand(admin, "Builtin sort: %s", value);
 	}
 	if (data.GetString("limit", value, sizeof(value))) {
 		int num;
@@ -391,7 +436,9 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients, int 
 			delete data;
 			return true;
 		} //you want 0? you get 0
+		limit = num;
 		data.Remove("limit");
+		// ReplyToCommand(admin, "Builtin limit: %i", num);
 	}
 	
 	//process target filters
@@ -425,6 +472,7 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients, int 
 	if (limit<=0) limit = MAXPLAYERS; //no limit == all results
 	for (int at; at<base.Length && limit; at += 1, limit -= 1) {
 		clients.Push(selector.targets[selector.targetCount] = base.Get(at, 1));
+		// ReplyToCommand(admin, "Selected: %N", selector.targets[selector.targetCount]);
 		selector.targetCount+=1;
 	}
 	selector.filled=true;

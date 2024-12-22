@@ -52,10 +52,19 @@ Range values are formatted according to this list and can be negated using a ! p
 ### Store selection
 
 If a plugin appears to be broken when using a dynamic selector, or if you dont want to re-type
-the selector every time you run a batch of commands, you can use `/select` and `@selected`.
+the selector every time you run a batch of commands, you can use `@selected` and `@macro`.
 
-As you might guess, `/select` stores any arbitrary argument as target parameter, later accessible
-as `@selected`. `/select` by default is accessible to everyone. For example:
+`/macroselect` stores any arbitrary argument as target parameter, later accessible as `@macro`.
+`/select` will store the current set of matching players to reuse later with `@selected`.
+
+The two use cases are random selections and negations. Using `@r` with `/macroselect` will pick
+a new random player every call, it just stores `@r`. If you want everyone but staff for example,
+this works better because it will retarget every time you run a command, even if players join or
+leave. `/select` on the other hand stores the set of players immediately, and `@selected` returns
+every player from the time of selection, that is still on the server when running a command. So
+`@r` will behave consistently, but players joining after `/select` are never targeted with `@selected`.
+
+`/macroselect` and `/select` are by default accessible to everyone. For example:
 `sm_select @r[flag=!z]; sm_slay @selected`
 
 This still uses target selectors, so you can't just make commands magically longer!
