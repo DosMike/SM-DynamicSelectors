@@ -12,7 +12,7 @@
 // IEEE754 BitPattern for -Inf
 #define FLOAT_NINFINITY view_as<float>(0xFF800000)
 
-#define PLUGIN_VERSION "24w51a"
+#define PLUGIN_VERSION "25w01a"
 
 // uncomment to allow server console to use dynamic selectors.
 // note: this method is ugly and requires a reload if plugins change!
@@ -102,8 +102,8 @@ public void ConVarLocked(ConVar convar, const char[] oldValue, const char[] newV
 
 public void OnPluginStart() {
 	g_selectorPattern = new Regex("(?<=^| )@[!]?[praes](?:\\[" //sm negation, plain pattern
-		..."(?:[^\\s=,\\\"\\'\\[\\]]+=[^\\s=,\\\"\\'\\[\\]]+" //key = value
-		..."(?:,[^\\s=,\\\"\\'\\[\\]]+=[^\\s=,\\\"\\'\\[\\]]+)*)?" //repeat
+		..."(?:[^\\s=,\\\"\\'\\[\\]]*=[^\\s=,\\\"\\'\\[\\]]*" //key = value
+		..."(?:,[^\\s=,\\\"\\'\\[\\]]*=[^\\s=,\\\"\\'\\[\\]]*)*)?" //repeat
 		..."\\])?(?= |$)", PCRE_UTF8); // value in [] is optional as well as [] itself
 	
 	RegConsoleCmd("sm_macroselect", CmdMacro, "Usage: /macroselect <clients> - Store a target selection macro to use with @macro");
@@ -159,6 +159,11 @@ Action CmdSelect(int client, int args) {
 		bool tn_is_ml;
 		// we return all. if the parent ProcessTargetString call specified filter bits right vvv here, that'll apply later
 		int count = ProcessTargetString(buffer, client, targets, sizeof(targets), COMMAND_FILTER_CONNECTED|COMMAND_FILTER_NO_IMMUNITY, tn, sizeof(tn), tn_is_ml);
+
+		if (count < 1) {
+			ReplyToTargetError(client, count);
+			return Plugin_Handled;
+		}
 
 		g_selections[client] = new ArrayList();
 		for (int i; i<count; i++) g_selections[client].Push(GetClientUserId(targets[i]));
@@ -341,27 +346,39 @@ public bool DynamicFilterProcessor(const char[] pattern, ArrayList clients, int 
 		paramStart+=1; //skip [
 		// *paramEnd-=1;* threat ] like 0, so dont subtract for buffer len
 		int start=paramStart;
-		bool ab;
+		bool inKey, hasValue;
+		int sz;
 		for (int pos=paramStart; pos<=paramEnd; pos+=1) {
-			if (!ab && pattern[pos]=='=') {
-				int sz=pos-start+1;
+			if (!inKey && pattern[pos]=='=') {
+				sz=pos-start+1;
 				if (sz>sizeof(key)) sz=sizeof(key);
 				strcopy(key, sz, pattern[start]);
 				start = pos+1;
-				ab = true;
-			} else if (ab && (pattern[pos]==','||pos==paramEnd)) {
-				int sz=pos-start+1;
+				inKey = true;
+				hasValue = false;
+				if (sz <= 1) {
+					ReplyToCommand(admin, "[DynSel] Empty key option, nothing before =");
+					delete base;
+					delete data;
+					return false;
+				}
+			} else if (inKey && (pattern[pos]==','||pos==paramEnd)) {
+				sz=pos-start+1;
 				if (sz>sizeof(value)) sz=sizeof(value);
 				strcopy(value, sz, pattern[start]);
 				start = pos+1;
-				ab = false;
+				inKey = false;
+				hasValue = sz > 1;
 				
 				//found another key
-				data.SetString(key, value);
-				// ReplyToCommand(admin, "Selection KV: %s = %s", key, value);
+				if (hasValue) {
+					data.SetString(key, value);
+				}
 			}
 		}
-		ReplyToCommand(admin, "[DynSel] Selection option \"%s\" has no value, ignoring", key);
+		if (inKey || !hasValue) {
+			ReplyToCommand(admin, "[DynSel] Selection option \"%s\" has no value, ignoring", key);
+		}
 	}
 	
 	//pre-process keyvalues
